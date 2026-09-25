@@ -4,7 +4,7 @@ amalgamate.py — 将拆分后的 xoaop.h 子模块合并为单个头文件
 用法:
     python amalgamate.py [--output OUTPUT_FILE]
 
-默认输出: xoaop_amalgamated.h
+默认输出: build/xoaop.h
 """
 
 import os
@@ -16,6 +16,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 子模块列表（按依赖顺序）
 SUB_MODULES = [
     "xoaop_defer.h",
+    "xoaop_raii_guard.h",
     "xoaop_pair.h",
     "xoaop_option.h",
     "xoaop_result.h",
@@ -99,7 +100,7 @@ def read_sub_module(filename):
     return "".join(result)
 
 
-def amalgamate(output_file):
+def amalgamate(output_dir, output_name):
     """合并所有子模块到输出文件"""
     base_file = os.path.join(SCRIPT_DIR, "xoaop.h")
 
@@ -124,7 +125,9 @@ def amalgamate(output_file):
         else:
             output_lines.append(line)
 
-    output_path = os.path.join(SCRIPT_DIR, output_file)
+    output_dir_path = os.path.join(SCRIPT_DIR, output_dir)
+    os.makedirs(output_dir_path, exist_ok=True)
+    output_path = os.path.join(output_dir_path, output_name)
     with open(output_path, "w", encoding="utf-8") as f:
         f.writelines(output_lines)
 
@@ -133,10 +136,11 @@ def amalgamate(output_file):
 
 
 def main():
-    output_file = "xoaop_amalgamated.h"
+    output_dir = "build"
+    output_name = "xoaop.h"
     if len(sys.argv) > 2 and sys.argv[1] == "--output":
-        output_file = sys.argv[2]
-    amalgamate(output_file)
+        output_name = sys.argv[2]
+    amalgamate(output_dir, output_name)
 
 
 if __name__ == "__main__":

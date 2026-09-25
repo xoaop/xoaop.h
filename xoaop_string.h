@@ -37,6 +37,9 @@ typedef struct xpString {
     char *c_str;
 
 #if defined(__cplusplus)
+        xpString() = default;
+        xpString(const char* str);
+        xpString(xpAllocator allocator, const char* str);
         bool operator== (xpString other) const;
         char operator[] (isize index) const;
         char *as_c_str() const;
@@ -159,12 +162,11 @@ char *xp_find_first_non_space(const char *str) {
 xpString xp_string_c(char const *str) {
     XP_ASSERT_DEFAULT(str != NULL);
 
-    xpString string = {
-        .allocator = {NULL, NULL},
-        .length = xp_strlen_c(str),
-        .capacity = xp_strlen_c(str),
-        .c_str = cast(char *)str
-    };
+    xpString string;
+    string.allocator = {NULL, NULL};
+    string.length = xp_strlen_c(str);
+    string.capacity = xp_strlen_c(str);
+    string.c_str = cast(char *)str;
     return string;
 }
 
@@ -400,10 +402,9 @@ xpString xp_make_string_from_slice(xpAllocator allocator, xpSlice slice) {
 
 
 xpSlice xp_slice_make(void *data, isize len) {
-    xpSlice slice = {
-        .data = data,
-        .len = len
-    };
+    xpSlice slice;
+    slice.data = data;
+    slice.len = len;
     return slice;
 }
 
@@ -430,6 +431,15 @@ xpSlice xp_slice_make_from_string(xpString string, isize begin, isize len) {
 //
 // xpString CPP 部分实现
 //
+
+
+xpString::xpString(const char* str) {
+    *this = xp_string_c(str);
+}
+
+xpString::xpString(xpAllocator allocator, const char* str) {
+    *this = xp_make_string(allocator, str);
+}
 
 bool xpString::operator== (xpString other) const {
     b32 xp_string_cmp(xpString a, xpString b);

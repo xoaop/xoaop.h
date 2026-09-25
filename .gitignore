@@ -1,0 +1,14 @@
+# 编译产物
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.dll
+*.lib
+
+# amalgamate.py 生成的合并头文件（由子模块重新生成，不入库）
+build/
+
+# 历史快照
+old/

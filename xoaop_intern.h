@@ -34,6 +34,7 @@ struct xpInterningTable {
 
 
     static constexpr size_t capacity = CAPACITY;
+    static_assert((CAPACITY & (CAPACITY - 1)) == 0, "InterningTable CAPACITY must be a power of 2");
 };
 
 template<typename T, size_t CAPACITY>
@@ -41,6 +42,9 @@ void xp_interning_table_init(xpInterningTable<T, CAPACITY> *table) {
     xp_arena_init_default(&table->arena);
     table->allocator = xp_arena_allocator(&table->arena);
 
+    for (isize i = 0; i < CAPACITY; ++i) {
+        table->buckets[i].used = false;
+    }
     table->count = 0;
 }
 
@@ -52,11 +56,7 @@ void xp_interning_table_free(xpInterningTable<T, CAPACITY> *table) {
 
 template<typename T, size_t CAPACITY>
 LinearProbeResult xp_interning_table_linear_probe(xpInterningTable<T, CAPACITY> *table, T key) {
-    if (table->capacity == 0) {
-        return {};
-    }
-
-    usize hash_value = xp_hash_func(&key);
+    usize hash_value = std::hash<T>{}(key);
     return linear_probe(hash_value, xpInterningTable<T, CAPACITY>::capacity, [&](isize index, bool* out_key_match) {
         xpInterningEntry<T>* entry = &table->buckets[index];
         // 只有已使用的条目才能比较key

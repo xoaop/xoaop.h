@@ -15,38 +15,132 @@
 
 template<typename K, typename V>
 struct xpHashMapEntry {
+    xpHashSlotState state;
     K key;
     V value;
-    xpHashSlotState state;
 };
+
+template<typename K, typename V>
+struct xpHashMapIterator;
 
 template<typename K, typename V>
 struct xpHashMap {
 
     xpAllocator allocator;
     xpHashMapEntry<K, V> *entries;
-
     isize count;
     isize capacity;
+
+    // 方法声明 —— 实现在文件末尾 (C API 之后)
+    static xpHashMap make(xpAllocator a);
+    void free();
+    xpHashMap copy(xpAllocator a) const;
+    V *insert(K key, V value);
+    xpHashMapEntry<K, V> *get_entry(K key) const;
+    V& get(K key);
+    template<typename F> V& get_or_insert(K key, F&& factory);
+    V& operator[](K key);
+    b32 remove(K key);
+    void clear();
+
+    xpHashMapIterator<K, V> begin() const;
+    xpHashMapIterator<K, V> end() const;
 };
 
+// --- 迭代器 ---
+
+template<typename K, typename V>
+struct xpHashMapIterator {
+    const xpHashMapEntry<K, V>* entries;
+    isize capacity;
+    isize index;
+
+    bool operator!=(const xpHashMapIterator& o) const { return index != o.index; }
+
+    void operator++() {
+        index++;
+        while (index < capacity && entries[index].state != XP_HASH_SLOT_USED)
+            index++;
+    }
+
+    const xpHashMapEntry<K, V>& operator*() const { return entries[index]; }
+    const xpHashMapEntry<K, V>* operator->() const { return &entries[index]; }
+};
+
+// --- 内部: 扩容 ---
+
+template<typename K, typename V>
+void xp_hash_map_extend(xpHashMap<K, V> *map, isize new_capacity) {
+    XP_ASSERT_MSG(new_capacity > map->capacity, "extend: new_capacity must be larger");
+
+    if (map->entries == NULL) {
+        map->entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * new_capacity);
+        for (isize i = 0; i < new_capacity; ++i) {
+            map->entries[i].state = XP_HASH_SLOT_EMPTY;
+        }
+    } else {
+        xpHashMapEntry<K, V> *new_entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * new_capacity);
+        for (isize i = 0; i < new_capacity; ++i) {
+            new_entries[i].state = XP_HASH_SLOT_EMPTY;
+        }
+
+        usize mask = static_cast<usize>(new_capacity) - 1;
+        for (isize i = 0; i < map->capacity; ++i) {
+            xpHashMapEntry<K, V> *old_entry = &map->entries[i];
+            if (old_entry->state == XP_HASH_SLOT_USED) {
+                usize hash_value = std::hash<K>{}(old_entry->key);
+                usize index = hash_value & mask;
+                while (new_entries[index].state == XP_HASH_SLOT_USED) {
+                    index = (index + 1) & mask;
+                }
+                new (&new_entries[index].key) K(std::move(old_entry->key));
+                new (&new_entries[index].value) V(std::move(old_entry->value));
+                new_entries[index].state = XP_HASH_SLOT_USED;
+
+                old_entry->key.~K();
+                old_entry->value.~V();
+                old_entry->state = XP_HASH_SLOT_EMPTY;
+            }
+        }
+        xp_free(map->allocator, map->entries);
+        map->entries = new_entries;
+    }
+
+    map->capacity = new_capacity;
+}
+
+// --- 内部: 线性探测 ---
+
+template<typename K, typename V>
+LinearProbeResult xp_hash_map_linear_probe(const xpHashMap<K, V> *map, K key) {
+    if (map->capacity == 0 || map->entries == nullptr) {
+        return {};
+    }
+
+    usize hash_value = std::hash<K>{}(key);
+
+    return linear_probe(hash_value, map->capacity, [&](isize index, bool* out_key_match) {
+        const xpHashMapEntry<K, V>* entry = &map->entries[index];
+        *out_key_match = false;
+        if (entry->state == XP_HASH_SLOT_USED) {
+            *out_key_match = (entry->key == key);
+        }
+        return entry->state;
+    });
+}
+
+// === C API ===
 
 template<typename K, typename V>
 xpHashMap<K, V> xp_hash_map_make(xpAllocator allocator) {
-    xpHashMap<K, V> hash_map = {};
-    hash_map.allocator = allocator;
-    hash_map.entries = NULL;
-
-    hash_map.count = 0;
-    hash_map.capacity = 0;
-
-    return hash_map;
+    xpHashMap<K, V> map = {};
+    map.allocator = allocator;
+    return map;
 }
 
 template<typename K, typename V>
 void xp_hash_map_free(xpHashMap<K, V> map) {
     if (map.entries != NULL) {
-        // 析构所有正在使用的元素
         for (isize i = 0; i < map.capacity; ++i) {
             if (map.entries[i].state == XP_HASH_SLOT_USED) {
                 map.entries[i].key.~K();
@@ -58,7 +152,7 @@ void xp_hash_map_free(xpHashMap<K, V> map) {
 }
 
 template<typename K, typename V>
-xpHashMap<K, V> xp_hash_map_copy(xpHashMap<K, V> *o, xpAllocator allocator) {
+xpHashMap<K, V> xp_hash_map_copy(const xpHashMap<K, V> *o, xpAllocator allocator) {
     xpHashMap<K, V> copy = {};
     copy.allocator = allocator;
     copy.count = o->count;
@@ -66,21 +160,11 @@ xpHashMap<K, V> xp_hash_map_copy(xpHashMap<K, V> *o, xpAllocator allocator) {
 
     if (o->capacity > 0 && o->entries != NULL) {
         copy.entries = xp_alloc_array<xpHashMapEntry<K, V>>(allocator, copy.capacity);
-        // 只初始化state字段
         for (isize i = 0; i < copy.capacity; ++i) {
-            copy.entries[i].state = XP_HASH_SLOT_EMPTY;
-        }
-
-        // 深拷贝每个元素
-        for (isize i = 0; i < o->capacity; ++i) {
-            const xpHashMapEntry<K, V> *src_entry = &o->entries[i];
-            xpHashMapEntry<K, V> *dst_entry = &copy.entries[i];
-
-            dst_entry->state = src_entry->state;
-            if (src_entry->state == XP_HASH_SLOT_USED) {
-                // 拷贝构造元素
-                new (&dst_entry->key) K(src_entry->key);
-                new (&dst_entry->value) V(src_entry->value);
+            copy.entries[i].state = o->entries[i].state;
+            if (o->entries[i].state == XP_HASH_SLOT_USED) {
+                new (&copy.entries[i].key) K(o->entries[i].key);
+                new (&copy.entries[i].value) V(o->entries[i].value);
             }
         }
     }
@@ -88,95 +172,20 @@ xpHashMap<K, V> xp_hash_map_copy(xpHashMap<K, V> *o, xpAllocator allocator) {
     return copy;
 }
 
-
-
-template<typename K, typename V>
-void xp_hash_map_extend(xpHashMap<K, V> *map, isize new_capacity) {
-    XP_ASSERT(new_capacity > map->capacity);
-
-    if (map->entries == NULL) {
-        map->entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * new_capacity);
-        // 只初始化state字段，不触碰key和value的内存（它们还未构造）
-        for (isize i = 0; i < new_capacity; ++i) {
-            map->entries[i].state = XP_HASH_SLOT_EMPTY;
-        }
-    } else {
-        // Rehash
-        xpHashMapEntry<K, V> *new_entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * new_capacity);
-        // 只初始化state字段
-        for (isize i = 0; i < new_capacity; ++i) {
-            new_entries[i].state = XP_HASH_SLOT_EMPTY;
-        }
-
-        for (isize i = 0; i < map->capacity; ++i) {
-            xpHashMapEntry<K, V> *old_entry = &map->entries[i];
-            if (old_entry->state == XP_HASH_SLOT_USED) { // 只rehash正在使用的条目，忽略墓碑
-                usize hash_value = xp_hash_func(&old_entry->key);
-                usize index = hash_value % new_capacity;
-                // 线性探测
-                while (new_entries[index].state == XP_HASH_SLOT_USED) {
-                    index = (index + 1) % new_capacity;
-                }
-                // 使用移动构造转移资源所有权
-                new (&new_entries[index].key) K(std::move(old_entry->key));
-                new (&new_entries[index].value) V(std::move(old_entry->value));
-                new_entries[index].state = XP_HASH_SLOT_USED;
-
-                // 析构原位置的元素
-                old_entry->key.~K();
-                old_entry->value.~V();
-                old_entry->state = XP_HASH_SLOT_EMPTY;
-            }
-        }
-        xp_free(map->allocator, map->entries);
-
-        map->entries = new_entries;
-    }
-
-    map->capacity = new_capacity;
-    return;
-}
-
-
-// HashMap专用的线性探测封装
-template<typename K, typename V>
-LinearProbeResult xp_hash_map_linear_probe(xpHashMap<K, V> map, K key) {
-    if (map.capacity == 0 || map.entries == nullptr) {
-        return {};
-    }
-
-    usize hash_value = xp_hash_func(&key);
-
-
-    return linear_probe(hash_value, map.capacity, [&](isize index, bool* out_key_match) {
-        xpHashMapEntry<K, V>* entry = &map.entries[index];
-        // 只有已使用的条目才能比较key
-        *out_key_match = false;
-        if (entry->state == XP_HASH_SLOT_USED) {
-            *out_key_match = (entry->key == key);
-        }
-        return entry->state;
-    });
-}
-
-
 template<typename K, typename V>
 V *xp_hash_map_insert(xpHashMap<K, V> *map, K key, V value) {
-    // 负载因子70%时扩容，避免哈希冲突过多
     if (map->capacity == 0 || (double)map->count / (double)map->capacity >= 0.7) {
-        xp_hash_map_extend(map, map->capacity + map->capacity / 2 + 1);
+        isize new_cap = map->capacity == 0 ? 8 : map->capacity * 2;
+        xp_hash_map_extend(map, new_cap);
     }
 
-    auto probe_result = xp_hash_map_linear_probe(*map, key);
+    auto probe_result = xp_hash_map_linear_probe(map, key);
 
-    // 如果key已经存在，更新值
     if (probe_result.found_index != -1) {
-        xpHashMapEntry<K, V>* entry = &map->entries[probe_result.found_index];
-        entry->value = value;
+        map->entries[probe_result.found_index].value = value;
         return nullptr;
     }
 
-    // 优先使用墓碑位置，其次使用空槽位置
     isize insert_index = -1;
     if (probe_result.first_tombstone != -1) {
         insert_index = probe_result.first_tombstone;
@@ -184,14 +193,12 @@ V *xp_hash_map_insert(xpHashMap<K, V> *map, K key, V value) {
         insert_index = probe_result.first_empty;
     }
 
-    // 理论上扩容后不可能没有空槽，这里做防御性检查
-    XP_ASSERT(insert_index != -1 && "Hash map is full after expansion");
+    XP_ASSERT_MSG(insert_index != -1, "insert: map is full after expansion");
     if (insert_index == -1) {
         return nullptr;
     }
 
     xpHashMapEntry<K, V>* insert_entry = &map->entries[insert_index];
-    // 使用placement new构造新元素
     new (&insert_entry->key) K(key);
     new (&insert_entry->value) V(value);
     insert_entry->state = XP_HASH_SLOT_USED;
@@ -200,22 +207,18 @@ V *xp_hash_map_insert(xpHashMap<K, V> *map, K key, V value) {
     return &insert_entry->value;
 }
 
-
-
 template<typename K, typename V>
 xpHashMapEntry<K, V> *xp_hash_map_get_entry(xpHashMap<K, V> map, K key) {
     if (map.count == 0 || map.capacity == 0 || map.entries == nullptr) {
         return NULL;
     }
 
-    auto probe_result = xp_hash_map_linear_probe(map, key);
+    auto probe_result = xp_hash_map_linear_probe(&map, key);
     if (probe_result.found_index == -1) {
         return nullptr;
     }
     return &map.entries[probe_result.found_index];
 }
-
-
 
 template<typename K, typename V>
 V *xp_hash_map_get(xpHashMap<K, V> map, K key) {
@@ -223,108 +226,114 @@ V *xp_hash_map_get(xpHashMap<K, V> map, K key) {
     return entry ? &entry->value : nullptr;
 }
 
-
 template<typename K, typename V>
 V *xp_hash_map_set(xpHashMap<K, V> *map, K key, V value) {
-    xpHashMapEntry<K, V> *entry;
-    if ((entry = xp_hash_map_get_entry(*map, key)) != NULL) {
+    xpHashMapEntry<K, V> *entry = xp_hash_map_get_entry(*map, key);
+    if (entry != NULL) {
         entry->value = value;
         return &entry->value;
     }
     return NULL;
 }
 
-
 template<typename K, typename V>
 b32 xp_hash_map_remove(xpHashMap<K, V> *map, K key) {
-    xpHashMapEntry<K, V> *entry;
-    if ((entry = xp_hash_map_get_entry(*map, key)) != NULL) {
-        // 显式析构元素资源
+    xpHashMapEntry<K, V> *entry = xp_hash_map_get_entry(*map, key);
+    if (entry != NULL) {
         entry->key.~K();
         entry->value.~V();
-        entry->state = XP_HASH_SLOT_TOMBSTONE; // 标记为墓碑，而不是直接清空
+        entry->state = XP_HASH_SLOT_TOMBSTONE;
         map->count -= 1;
         return true;
     }
     return false;
 }
 
-
-// 清空哈希表所有元素，保留容量
 template<typename K, typename V>
 void xp_hash_map_clear(xpHashMap<K, V> *map) {
-    if (map->entries == NULL) {
-        return;
-    }
+    if (map->entries == NULL) return;
 
     for (isize i = 0; i < map->capacity; ++i) {
-        xpHashMapEntry<K, V> *entry = &map->entries[i];
-        if (entry->state == XP_HASH_SLOT_USED) {
-            entry->key.~K();
-            entry->value.~V();
-            entry->state = XP_HASH_SLOT_EMPTY;
-        } else if (entry->state == XP_HASH_SLOT_TOMBSTONE) {
-            entry->state = XP_HASH_SLOT_EMPTY;
+        if (map->entries[i].state == XP_HASH_SLOT_USED) {
+            map->entries[i].key.~K();
+            map->entries[i].value.~V();
+            map->entries[i].state = XP_HASH_SLOT_EMPTY;
+        } else if (map->entries[i].state == XP_HASH_SLOT_TOMBSTONE) {
+            map->entries[i].state = XP_HASH_SLOT_EMPTY;
         }
     }
 
     map->count = 0;
 }
 
+// --- 方法实现 (调用上面的 C API) ---
 
 template<typename K, typename V>
-isize xp_hash_map_first_entry(xpHashMap<K, V> *map, xpHashMapEntry<K, V> **first_entry) {
-    for (isize i = 0; i < map->capacity; i++) {
-        if (map->entries[i].state == XP_HASH_SLOT_USED) {
-            *first_entry = &map->entries[i];
-            return i;
-        }
-    }
-
-    *first_entry = NULL;
-    return END_OF_HASH_MAP_INDEX;
+xpHashMap<K, V> xpHashMap<K, V>::make(xpAllocator a) {
+    return xp_hash_map_make<K, V>(a);
 }
 
-
 template<typename K, typename V>
-isize xp_hash_map_next_entry(xpHashMap<K, V> *map, isize curr_pos, xpHashMapEntry<K, V> **next_entry) {
-    for (isize i = curr_pos + 1; i < map->capacity; i++) {
-        if (map->entries[i].state == XP_HASH_SLOT_USED) {
-            *next_entry = &map->entries[i];
-            return i;
-        }
-    }
-
-    *next_entry = NULL;
-    return END_OF_HASH_MAP_INDEX;
+void xpHashMap<K, V>::free() {
+    xp_hash_map_free(*this);
 }
 
-
 template<typename K, typename V>
-isize xp_hash_map_first_entry(const xpHashMap<K, V> *map, const xpHashMapEntry<K, V> **first_entry) {
-    for (isize i = 0; i < map->capacity; i++) {
-        if (map->entries[i].state == XP_HASH_SLOT_USED) {
-            *first_entry = &map->entries[i];
-            return i;
-        }
-    }
-
-    *first_entry = NULL;
-    return END_OF_HASH_MAP_INDEX;
+xpHashMap<K, V> xpHashMap<K, V>::copy(xpAllocator a) const {
+    return xp_hash_map_copy(this, a);
 }
 
+template<typename K, typename V>
+V *xpHashMap<K, V>::insert(K key, V value) {
+    return xp_hash_map_insert(this, key, value);
+}
 
 template<typename K, typename V>
-isize xp_hash_map_next_entry(const xpHashMap<K, V> *map, isize curr_pos, const xpHashMapEntry<K, V> **next_entry) {
-    for (isize i = curr_pos + 1; i < map->capacity; i++) {
-        if (map->entries[i].state == XP_HASH_SLOT_USED) {
-            *next_entry = &map->entries[i];
-            return i;
-        }
-    }
+xpHashMapEntry<K, V> *xpHashMap<K, V>::get_entry(K key) const {
+    return xp_hash_map_get_entry(*this, key);
+}
 
-    *next_entry = NULL;
-    return END_OF_HASH_MAP_INDEX;
+template<typename K, typename V>
+V& xpHashMap<K, V>::get(K key) {
+    return get_or_insert(key, []{ return V{}; });
+}
+
+template<typename K, typename V>
+template<typename F>
+V& xpHashMap<K, V>::get_or_insert(K key, F&& factory) {
+    V* v = xp_hash_map_get(*this, key);
+    if (v) return *v;
+    return *insert(key, factory());
+}
+
+template<typename K, typename V>
+V& xpHashMap<K, V>::operator[](K key) {
+    V *v = xp_hash_map_get(*this, key);
+    XP_ASSERT_MSG(v != nullptr, "operator[]: key not found");
+    return *v;
+}
+
+template<typename K, typename V>
+b32 xpHashMap<K, V>::remove(K key) {
+    return xp_hash_map_remove(this, key);
+}
+
+template<typename K, typename V>
+void xpHashMap<K, V>::clear() {
+    xp_hash_map_clear(this);
+}
+
+template<typename K, typename V>
+xpHashMapIterator<K, V> xpHashMap<K, V>::begin() const {
+    isize idx = 0;
+    while (idx < capacity && entries[idx].state != XP_HASH_SLOT_USED)
+        idx++;
+    return {entries, capacity, idx};
+}
+
+template<typename K, typename V>
+xpHashMapIterator<K, V> xpHashMap<K, V>::end() const {
+    return {entries, capacity, capacity};
 }
 
 #endif // __cplusplus
