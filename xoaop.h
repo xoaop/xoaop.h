@@ -140,7 +140,7 @@ bool xp_check_f64_is_inf(f64 value);
     }                                                           \
 } while(0)
 
-#define XP_ASSERT_DEFAULT(exp) XP_ASSERT_MSG(exp, "")
+#define XP_ASSERT_DEFAULT(exp) XP_ASSERT_MSG(exp, "%s", "")
 
 
 #define XP_TODO() XP_ASSERT_DEFAULT(0)
