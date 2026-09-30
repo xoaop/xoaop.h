@@ -29,6 +29,7 @@ struct xpHashMap {
     xpAllocator allocator;
     xpHashMapEntry<K, V> *entries;
     isize count;
+    isize occupied;   // 已占槽位 = 存活 + 墓碑，增量维护
     isize capacity;
 
     // 方法声明 —— 实现在文件末尾 (C API 之后)
@@ -67,6 +68,35 @@ struct xpHashMapIterator {
     const xpHashMapEntry<K, V>* operator->() const { return &entries[index]; }
 };
 
+// --- 内部: 重哈希 —— 只搬 USED 条目，墓碑自然消失 ---
+
+template<typename K, typename V>
+void xp_hash_map_rehash(xpHashMap<K, V> *map, xpHashMapEntry<K, V> *new_entries, isize new_capacity) {
+    for (isize i = 0; i < new_capacity; ++i) {
+        new_entries[i].state = XP_HASH_SLOT_EMPTY;
+    }
+
+    usize mask = static_cast<usize>(new_capacity) - 1;
+    for (isize i = 0; i < map->capacity; ++i) {
+        xpHashMapEntry<K, V> *old_entry = &map->entries[i];
+        if (old_entry->state != XP_HASH_SLOT_USED) {
+            continue;
+        }
+
+        usize index = std::hash<K>{}(old_entry->key) & mask;
+        while (new_entries[index].state == XP_HASH_SLOT_USED) {
+            index = (index + 1) & mask;
+        }
+        new (&new_entries[index].key) K(std::move(old_entry->key));
+        new (&new_entries[index].value) V(std::move(old_entry->value));
+        new_entries[index].state = XP_HASH_SLOT_USED;
+
+        old_entry->key.~K();
+        old_entry->value.~V();
+        old_entry->state = XP_HASH_SLOT_EMPTY;
+    }
+}
+
 // --- 内部: 扩容 ---
 
 template<typename K, typename V>
@@ -78,36 +108,36 @@ void xp_hash_map_extend(xpHashMap<K, V> *map, isize new_capacity) {
         for (isize i = 0; i < new_capacity; ++i) {
             map->entries[i].state = XP_HASH_SLOT_EMPTY;
         }
-    } else {
-        xpHashMapEntry<K, V> *new_entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * new_capacity);
-        for (isize i = 0; i < new_capacity; ++i) {
-            new_entries[i].state = XP_HASH_SLOT_EMPTY;
-        }
-
-        usize mask = static_cast<usize>(new_capacity) - 1;
-        for (isize i = 0; i < map->capacity; ++i) {
-            xpHashMapEntry<K, V> *old_entry = &map->entries[i];
-            if (old_entry->state == XP_HASH_SLOT_USED) {
-                usize hash_value = std::hash<K>{}(old_entry->key);
-                usize index = hash_value & mask;
-                while (new_entries[index].state == XP_HASH_SLOT_USED) {
-                    index = (index + 1) & mask;
-                }
-                new (&new_entries[index].key) K(std::move(old_entry->key));
-                new (&new_entries[index].value) V(std::move(old_entry->value));
-                new_entries[index].state = XP_HASH_SLOT_USED;
-
-                old_entry->key.~K();
-                old_entry->value.~V();
-                old_entry->state = XP_HASH_SLOT_EMPTY;
-            }
-        }
-        xp_free(map->allocator, map->entries);
-        map->entries = new_entries;
+        map->capacity = new_capacity;
+        map->occupied = 0;
+        return;
     }
 
+    xpHashMapEntry<K, V> *new_entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * new_capacity);
+    xp_hash_map_rehash(map, new_entries, new_capacity);
+    xp_free(map->allocator, map->entries);
+    map->entries = new_entries;
     map->capacity = new_capacity;
+    map->occupied = map->count;   // 重建后只剩存活条目，墓碑全清
 }
+
+// --- 内部: 原地重建 —— 容量不变，只清墓碑 ---
+
+// 墓碑不参与搬迁，故重建后 occupied == count。
+template<typename K, typename V>
+void xp_hash_map_rebuild(xpHashMap<K, V> *map) {
+    if (map->capacity == 0 || map->entries == NULL) {
+        return;
+    }
+
+    xpHashMapEntry<K, V> *new_entries = (xpHashMapEntry<K, V> *) xp_alloc(map->allocator, sizeof(xpHashMapEntry<K, V>) * map->capacity);
+    xp_hash_map_rehash(map, new_entries, map->capacity);
+    xp_free(map->allocator, map->entries);
+    map->entries = new_entries;
+    map->occupied = map->count;
+}
+
+// 已占槽位 = 存活 + 墓碑，由 insert/remove/rehash 增量维护
 
 // --- 内部: 线性探测 ---
 
@@ -156,6 +186,7 @@ xpHashMap<K, V> xp_hash_map_copy(const xpHashMap<K, V> *o, xpAllocator allocator
     xpHashMap<K, V> copy = {};
     copy.allocator = allocator;
     copy.count = o->count;
+    copy.occupied = o->occupied;
     copy.capacity = o->capacity;
 
     if (o->capacity > 0 && o->entries != NULL) {
@@ -177,6 +208,9 @@ V *xp_hash_map_insert(xpHashMap<K, V> *map, K key, V value) {
     if (map->capacity == 0 || (double)map->count / (double)map->capacity >= 0.7) {
         isize new_cap = map->capacity == 0 ? 8 : map->capacity * 2;
         xp_hash_map_extend(map, new_cap);
+    } else if ((double)map->occupied / (double)map->capacity >= 0.7) {
+        // 墓碑挤占空槽：原地重建。只扩容的话，live 少而反复增删的表会无限涨容量
+        xp_hash_map_rebuild(map);
     }
 
     auto probe_result = xp_hash_map_linear_probe(map, key);
@@ -204,6 +238,10 @@ V *xp_hash_map_insert(xpHashMap<K, V> *map, K key, V value) {
     insert_entry->state = XP_HASH_SLOT_USED;
 
     map->count += 1;
+    // 复用墓碑不增加占位，占空槽才增加
+    if (probe_result.first_tombstone == -1) {
+        map->occupied += 1;
+    }
     return &insert_entry->value;
 }
 
@@ -264,6 +302,7 @@ void xp_hash_map_clear(xpHashMap<K, V> *map) {
     }
 
     map->count = 0;
+    map->occupied = 0;
 }
 
 // --- 方法实现 (调用上面的 C API) ---
