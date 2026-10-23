@@ -212,25 +212,18 @@ xpString xp_make_string_count(xpAllocator allocator, char const *str, isize coun
     xpString string = xp_make_string_zero();
     string.allocator = allocator;
 
-    // 计算实际长度
-    isize actual_count = 0;
-    if (str != NULL) {
-        actual_count = xp_strlen_c(cast(char const *)str);
-    }
+    // count 就是长度，不扫描 NUL。
+    // 之前这里做 xp_strlen_c(str)：当 str 指向更大缓冲区中间（词法器传的是源码
+    // 里某个 token 的起点）时会一路扫到缓冲区末尾，每个 token 一次，整体 O(n^2)。
+    string.length = count;
+    string.capacity = count;
 
-    isize length = 0;
-    if (actual_count < count) {
-        length = actual_count;
-    } else {
-        length = count;
-    }
-    string.length = length;
-
-    string.c_str = cast(char *) xp_alloc(string.allocator, length + 1); // NOTE: +1是为了末尾的'\0'
-    string.capacity = length;
+    string.c_str = cast(char *) xp_alloc(string.allocator, count + 1); // NOTE: +1是为了末尾的'\0'
 
     // 复制字符串内容
-    memcpy(string.c_str, str, string.length);
+    if (count > 0) {
+        memcpy(string.c_str, str, (size_t) count);
+    }
 
     // 末尾补上'\0'
     string.c_str[string.capacity] = '\0';
