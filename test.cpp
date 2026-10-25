@@ -112,6 +112,61 @@ static void test_defer() {
     std::printf("[OK] test_defer\n");
 }
 
+static void test_iter() {
+    int arr[] = {1, 2, 3};
+
+    isize sum = 0;
+    FOR(arr) { sum += it; }
+    XP_ASSERT(sum == 6);
+
+    // it 是可写引用
+    FOR(arr) { it *= 2; }
+    XP_ASSERT(arr[0] == 2 && arr[1] == 4 && arr[2] == 6);
+
+    // break / continue 直接作用于循环
+    sum = 0;
+    FOR(arr) {
+        if (it == 4) continue;
+        if (it == 6) break;
+        sum += it;
+    }
+    XP_ASSERT(sum == 2);
+
+    // it_index：0 开始，有符号，和 it 同步
+    isize expect_index = 0;
+    FOR(arr) {
+        XP_ASSERT(it_index == expect_index);
+        XP_ASSERT(arr[it_index] == it);
+        expect_index += 1;
+    }
+    XP_ASSERT(expect_index == 3);
+
+    // 同时用两个
+    sum = 0;
+    FOR(arr) { sum += it * (it_index + 1); }
+    XP_ASSERT(sum == 2 * 1 + 4 * 2 + 6 * 3);
+
+    // 只用 it 不用 it_index 也不该有未使用变量告警（编译时可见）
+    sum = 0;
+    FOR(arr) { sum += it; }
+    XP_ASSERT(sum == 12);
+
+    // 自定义容器：只要有 begin()/end() 就能遍历
+    struct IntRange {
+        int *data;
+        isize count;
+        int *begin() { return data; }
+        int *end() { return data + count; }
+    };
+    int nums[] = {5, 6, 7};
+    IntRange range{nums, 3};
+    sum = 0;
+    FOR(range) { sum += it; }
+    XP_ASSERT(sum == 18);
+
+    std::printf("[OK] test_iter\n");
+}
+
 static void test_hashmap() {
     auto map = xp_hash_map_make<int, xpString>(xp_heap_allocator());
 
@@ -363,6 +418,7 @@ int main() {
     test_result();
     test_pair();
     test_defer();
+    test_iter();
     test_hashmap();
     test_hashset();
     test_hash();

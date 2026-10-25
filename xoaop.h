@@ -337,6 +337,7 @@ xp_define void xp_arena_allocator_free_to_save(xpAllocator allocator, xpArenaSav
 
 // === 子模块 includes ===
 #include "xoaop_defer.h"
+#include "xoaop_iter.h"
 #include "xoaop_pair.h"
 #include "xoaop_option.h"
 #include "xoaop_result.h"

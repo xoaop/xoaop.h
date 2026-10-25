@@ -16,6 +16,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 子模块列表（按依赖顺序）
 SUB_MODULES = [
     "xoaop_defer.h",
+    "xoaop_iter.h",
     "xoaop_pair.h",
     "xoaop_option.h",
     "xoaop_result.h",
