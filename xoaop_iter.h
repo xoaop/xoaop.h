@@ -5,6 +5,9 @@
         循环体里 it       = 当前元素的引用
                    it_index = 当前元素的下标（0 开始，isize）
 
+    FOR_0_TO(n) { ... }
+        循环体里 it       = 0..n-1（计次循环，没有容器可遍历时用）
+
     展开是一句普通 for：只用 std::begin/std::end 和一次自增计数器，
     不依赖 <ranges>/std::views::enumerate。
 
@@ -49,6 +52,13 @@
              _for_it.cur != _for_it.last; ++_for_it.cur, ++_for_it.idx)             \
             if ([[maybe_unused]] const isize it_index = _for_it.idx; true)          \
                 if ([[maybe_unused]] auto&& it = *_for_it.cur; true)
+
+// 计次循环（没有容器可遍历）：重复 n 次，it 就是 0..n-1 的下标。
+//   FOR_0_TO(n) { sum += it; }
+// 展开始终是单条 for，所以没有 FOR 的 else 归属问题；
+// 边界表达式只求值一次，n <= 0 时一次都不执行。
+#define FOR_0_TO(...)                                                               \
+    for ([[maybe_unused]] isize it = 0, _for_end = (__VA_ARGS__); it < _for_end; ++it)
 
 #endif // __cplusplus >= 201703L
 

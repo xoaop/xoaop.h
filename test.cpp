@@ -164,6 +164,42 @@ static void test_iter() {
     FOR(range) { sum += it; }
     XP_ASSERT(sum == 18);
 
+    // ---- FOR_0_TO：计次循环 ----
+    sum = 0;
+    FOR_0_TO(5) { sum += it; }
+    XP_ASSERT(sum == 0 + 1 + 2 + 3 + 4);
+
+    // 边界表达式只求值一次
+    isize bound_calls = 0;
+    auto bound = [&]() -> isize { bound_calls += 1; return 3; };
+    sum = 0;
+    FOR_0_TO(bound()) { sum += 1; }
+    XP_ASSERT(sum == 3);
+    XP_ASSERT(bound_calls == 1);
+
+    // n <= 0：一次都不执行
+    sum = 0;
+    FOR_0_TO(0) { sum += 1; }
+    FOR_0_TO(-4) { sum += 1; }
+    XP_ASSERT(sum == 0);
+
+    // break / continue
+    sum = 0;
+    FOR_0_TO(10) {
+        if (it == 2) continue;
+        if (it == 5) break;
+        sum += it;
+    }
+    XP_ASSERT(sum == 0 + 1 + 3 + 4);
+
+    // 嵌套：内层遮蔽外层
+    sum = 0;
+    FOR_0_TO(3) {
+        auto outer = it;
+        FOR_0_TO(2) { sum += outer * 10 + it; }
+    }
+    XP_ASSERT(sum == (0 + 1) + (10 + 11) + (20 + 21));
+
     std::printf("[OK] test_iter\n");
 }
 
