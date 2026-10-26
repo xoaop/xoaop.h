@@ -5,6 +5,9 @@
 #include <cstring>
 #include <utility>
 #include <cstdint>
+#include <map>
+#include <vector>
+#include <type_traits>
 
 static void test_string() {
     // 默认构造（值初始化归零）
@@ -119,8 +122,22 @@ static void test_iter() {
     FOR(arr) { sum += it; }
     XP_ASSERT(sum == 6);
 
-    // it 是可写引用
-    FOR(arr) { it *= 2; }
+    // FOR 是只读的：it 是 const 引用
+    FOR(arr) {
+        using Elem = std::remove_reference_t<decltype(it)>;
+        static_assert(std::is_const_v<Elem>, "FOR 的 it 必须是 const");
+        sum += it;
+    }
+    XP_ASSERT(sum == 12);
+
+    // FOR_MUT 的 it 是可写引用
+    FOR_MUT(arr) {
+        using Elem = std::remove_reference_t<decltype(it)>;
+        static_assert(!std::is_const_v<Elem>, "FOR_MUT 的 it 不能是 const");
+    }
+
+    // FOR_MUT：改元素就是改容器
+    FOR_MUT(arr) { it *= 2; }
     XP_ASSERT(arr[0] == 2 && arr[1] == 4 && arr[2] == 6);
 
     // break / continue 直接作用于循环
@@ -151,6 +168,17 @@ static void test_iter() {
     FOR(arr) { sum += it; }
     XP_ASSERT(sum == 12);
 
+    // const 容器上 FOR 也能用
+    const std::vector<int> cvec{1, 2, 3};
+    sum = 0;
+    FOR(cvec) { sum += it; }
+    XP_ASSERT(sum == 6);
+
+    // FOR_MUT 改 std::vector
+    std::vector<int> vec{1, 2, 3};
+    FOR_MUT(vec) { it += 10; }
+    XP_ASSERT(vec[0] == 11 && vec[2] == 13);
+
     // 自定义容器：只要有 begin()/end() 就能遍历
     struct IntRange {
         int *data;
@@ -163,6 +191,22 @@ static void test_iter() {
     sum = 0;
     FOR(range) { sum += it; }
     XP_ASSERT(sum == 18);
+    FOR_MUT(range) { it *= 3; }
+    XP_ASSERT(nums[0] == 15 && nums[2] == 21);
+
+    // 代理迭代器（vector<bool>）：FOR_MUT 仍然写回原位
+    std::vector<bool> bits{true, false, true};
+    FOR_MUT(bits) { it = !it; }
+    XP_ASSERT(!bits[0] && bits[1] && !bits[2]);
+    sum = 0;
+    FOR(bits) { sum += it ? 1 : 0; }
+    XP_ASSERT(sum == 1);
+
+    // std::map：元素是 pair<const K, V>，只读遍历能读 key/value
+    std::map<int, int> table{{1, 10}, {2, 20}};
+    sum = 0;
+    FOR(table) { sum += it.second + it_index; }
+    XP_ASSERT(sum == 10 + 0 + 20 + 1);
 
     // ---- FOR_0_TO：计次循环 ----
     sum = 0;
