@@ -11,10 +11,12 @@
 #error "xoaop_string.h requires xoaop.h to be included first"
 #endif
 
+#if defined(__cplusplus)
 #include <string>
 #include <string_view>
 #if __cplusplus >= 202300L
 #include <format>
+#endif
 #endif
 
 #if defined(__cplusplus)
@@ -38,12 +40,20 @@ typedef struct xpStringMetaData {
     isize capacity;
 } xpStringMetaData;
 
+#if defined(__cplusplus)
+#define XP_STRING_META(str) (((xpStringMetaData *)(cast(char *)(str))) - 1)
+#else
 #define XP_STRING_META(str) (((xpStringMetaData *)((str).c_str)) - 1)
+#endif
 
 typedef struct xpString {
+#if defined(__cplusplus)
+private:
+#endif
     char *c_str;
 
 #if defined(__cplusplus)
+public:
     xpString();
     xpString(char const *str);
     xpString(xpAllocator allocator, char const *str);
@@ -52,6 +62,8 @@ typedef struct xpString {
     bool operator!=(xpString other) const;
     bool operator==(char const *other) const;
     bool operator!=(char const *other) const;
+
+    friend xpString xp_string_alloc(xpAllocator allocator, isize capacity);
 #endif // __cplusplus
 } xpString;
 
@@ -112,7 +124,7 @@ inline b32 xp_string_cmp(xpString a, char const *b) {
     if (a_count == 0) {
         return 0;
     }
-    return memcmp(a.c_str, b, static_cast<size_t>(a_count));
+    return memcmp(a, b, static_cast<size_t>(a_count));
 }
 
 inline b32 xp_string_equal(xpString a, char const *b) {
@@ -140,8 +152,8 @@ inline xpString xp_string_replace_char(char const *string, char old_char, char n
 
     isize count = xp_string_count(new_string);
     for (isize i = 0; i < count; i++) {
-        if (new_string.c_str[i] == old_char) {
-            new_string.c_str[i] = new_char;
+        if (new_string[i] == old_char) {
+            new_string[i] = new_char;
         }
     }
 
@@ -172,7 +184,7 @@ struct std::formatter<xpString> : std::formatter<std::string_view> {
 
 
     auto format(const xpString& s, std::format_context& ctx) const {
-        const char *data = s.c_str != NULL ? s.c_str : "";
+        const char *data = cast(char *)(s) != NULL ? cast(char *)(s) : "";
         std::string_view view(data, static_cast<size_t>(xp_string_count(s)));
         return std::formatter<std::string_view>::format(view, ctx);
     }
@@ -203,7 +215,7 @@ char *xp_find_first_non_space(const char *str) {
 }
 
 
-static xpString xp_string_alloc(xpAllocator allocator, isize capacity) {
+xpString xp_string_alloc(xpAllocator allocator, isize capacity) {
     XP_ASSERT_DEFAULT(capacity >= 0);
 
     isize size = cast(isize)sizeof(xpStringMetaData) + capacity + 1;
@@ -225,14 +237,14 @@ static xpString xp_string_alloc(xpAllocator allocator, isize capacity) {
 }
 
 isize xp_string_count(xpString string) {
-    if (string.c_str == NULL) {
+    if (cast(char *)(string) == NULL) {
         return 0;
     }
     return XP_STRING_META(string)->count;
 }
 
 isize xp_string_capacity(xpString string) {
-    if (string.c_str == NULL) {
+    if (cast(char *)(string) == NULL) {
         return 0;
     }
     return XP_STRING_META(string)->capacity;
@@ -251,7 +263,7 @@ xpString xp_make_string_capacity(xpAllocator allocator, void const *str, isize c
     XP_ASSERT_DEFAULT(capacity >= 0);
 
     xpString string = xp_string_alloc(allocator, capacity);
-    if (string.c_str == NULL) {
+    if (cast(char *)(string) == NULL) {
         return string;
     }
 
@@ -261,10 +273,10 @@ xpString xp_make_string_capacity(xpAllocator allocator, void const *str, isize c
         if (count > capacity) {
             count = capacity;
         }
-        memcpy(string.c_str, str, cast(size_t)count);
+        memcpy(string, str, cast(size_t)count);
     }
 
-    string.c_str[count] = '\0';
+    string[count] = '\0';
     XP_STRING_META(string)->count = count;
 
     return string;
@@ -274,33 +286,37 @@ xpString xp_make_string_count(xpAllocator allocator, char const *str, isize coun
     XP_ASSERT_DEFAULT(count >= 0);
 
     xpString string = xp_string_alloc(allocator, count);
-    if (string.c_str == NULL) {
+    if (cast(char *)(string) == NULL) {
         return string;
     }
 
     if (str != NULL && count > 0) {
-        memcpy(string.c_str, str, cast(size_t)count);
+        memcpy(string, str, cast(size_t)count);
     }
 
-    string.c_str[count] = '\0';
+    string[count] = '\0';
     XP_STRING_META(string)->count = count;
 
     return string;
 }
 
 xpString xp_make_string_zero() {
+#if defined(__cplusplus)
+    return xpString();
+#else
     xpString string;
     string.c_str = NULL;
     return string;
+#endif
 }
 
 xpString xp_string_to_c_style(xpString string, xpAllocator allocator) {
-    return xp_make_string_count(allocator, string.c_str, xp_string_count(string));
+    return xp_make_string_count(allocator, string, xp_string_count(string));
 }
 
 
 void xp_string_free(xpString string) {
-    if (string.c_str == NULL) {
+    if (cast(char *)(string) == NULL) {
         return;
     }
 
@@ -320,7 +336,7 @@ b32 xp_string_cmp(xpString a, xpString b) {
     if (a_count == 0) {
         return 0;
     }
-    return memcmp(a.c_str, b.c_str, cast(size_t)a_count);
+    return memcmp(a, b, cast(size_t)a_count);
 }
 
 b32 xp_string_equal(xpString a, xpString b) {
@@ -331,14 +347,14 @@ xpString xp_string_copy(xpAllocator allocator, xpString string) {
     isize count = xp_string_count(string);
 
     xpString string_copy = xp_string_alloc(allocator, count);
-    if (string_copy.c_str == NULL) {
+    if (cast(char *)(string_copy) == NULL) {
         return string_copy;
     }
 
     if (count > 0) {
-        memcpy(string_copy.c_str, string.c_str, cast(size_t)count);
+        memcpy(string_copy, string, cast(size_t)count);
     }
-    string_copy.c_str[count] = '\0'; // 末尾补上'\0'
+    string_copy[count] = '\0'; // 末尾补上'\0'
     XP_STRING_META(string_copy)->count = count;
 
     return string_copy;
@@ -346,25 +362,26 @@ xpString xp_string_copy(xpAllocator allocator, xpString string) {
 
 
 xpString *xp_string_extend(xpString *string, isize extended_size) {
-    if (extended_size <= 0 || string == NULL || string->c_str == NULL) {
+    if (extended_size <= 0 || string == NULL || cast(char *)(*string) == NULL) {
         return string;
     }
 
     xpStringMetaData *meta = XP_STRING_META(*string);
-    isize old_capacity = meta->capacity;
-    isize new_capacity = old_capacity + extended_size;
-    isize old_size = cast(isize)sizeof(xpStringMetaData) + old_capacity + 1;
-    isize new_size = cast(isize)sizeof(xpStringMetaData) + new_capacity + 1;
-
-    xpStringMetaData *new_meta = cast(xpStringMetaData *)xp_realloc(meta->allocator, meta, new_size, old_size);
-    XP_ASSERT_DEFAULT(new_meta != NULL);
-    if (new_meta == NULL) {
+    isize count = meta->count;
+    isize new_capacity = meta->capacity + extended_size;
+    xpString new_string = xp_string_alloc(meta->allocator, new_capacity);
+    if (cast(char *)(new_string) == NULL) {
         return string;
     }
 
-    new_meta->capacity = new_capacity;
-    string->c_str = cast(char *)(new_meta + 1);
-    string->c_str[new_meta->count] = '\0'; // 末尾补上'\0'
+    if (count > 0) {
+        memcpy(new_string, *string, cast(size_t)count);
+    }
+    new_string[count] = '\0'; // 末尾补上'\0'
+    XP_STRING_META(new_string)->count = count;
+
+    xp_string_free(*string);
+    *string = new_string;
 
     return string;
 }
@@ -372,7 +389,7 @@ xpString *xp_string_extend(xpString *string, isize extended_size) {
 isize xp_string_find_char(xpString str, char c) {
     isize count = xp_string_count(str);
     for (isize i = 0; i < count; i++) {
-        if (str.c_str[i] == c) {
+        if (str[i] == c) {
             return i;
         }
     }
@@ -380,7 +397,7 @@ isize xp_string_find_char(xpString str, char c) {
 }
 
 
-// NOTE(xoaop): str->c_str 必须非空, data_count > 0
+// NOTE(xoaop): cast(char *)(*str) 必须非空, data_count > 0
 static void xp_string_insert_raw(isize pos, xpString *str, void const *data, isize data_count) {
     isize count = xp_string_count(*str);
     isize capacity = xp_string_capacity(*str);
@@ -389,7 +406,7 @@ static void xp_string_insert_raw(isize pos, xpString *str, void const *data, isi
         xp_string_extend(str, count + data_count - capacity);
     }
 
-    char *chars = str->c_str;
+    char *chars = cast(char *)(*str);
 
     if (pos < count) {
         memmove(chars + pos + data_count, chars + pos, cast(size_t)(count - pos));
@@ -411,12 +428,12 @@ xpString *xp_string_insert(isize pos, xpString *str, xpString inserted_str) {
         return str;
     }
 
-    if (str->c_str == NULL) {
+    if (cast(char *)(*str) == NULL) {
         *str = xp_string_copy(XP_STRING_META(inserted_str)->allocator, inserted_str);
         return str;
     }
 
-    xp_string_insert_raw(pos, str, inserted_str.c_str, inserted_count);
+    xp_string_insert_raw(pos, str, inserted_str, inserted_count);
 
     return str;
 }
@@ -426,7 +443,7 @@ xpString *xp_string_append_char(xpString *str, char c) {
         return str;
     }
 
-    if (str->c_str == NULL) {
+    if (cast(char *)(*str) == NULL) {
         *str = xp_make_string_count(xp_default_allocator(), &c, 1);
         return str;
     }
@@ -453,7 +470,7 @@ xpString *xp_string_append_c(xpString *str, char const *appended_str) {
         return str;
     }
 
-    if (str->c_str == NULL) {
+    if (cast(char *)(*str) == NULL) {
         *str = xp_make_string_count(xp_default_allocator(), appended_str, appended_count);
         return str;
     }
@@ -468,10 +485,10 @@ xpString xp_isize_to_string(isize value, xpAllocator allocator) {
     isize len = snprintf(NULL, 0, "%lld", value);
 
     xpString string = xp_make_string_capacity(allocator, NULL, len);
-    if (string.c_str == NULL) {
+    if (cast(char *)(string) == NULL) {
         return string;
     }
-    snprintf(string.c_str, cast(size_t)(len + 1), "%lld", value);
+    snprintf(string, cast(size_t)(len + 1), "%lld", value);
 
     XP_STRING_META(string)->count = len;
 
@@ -483,8 +500,8 @@ xpString xp_string_replace_char(xpString string, char old_char, char new_char, x
 
     isize count = xp_string_count(new_string);
     for (isize i = 0; i < count; i++) {
-        if (new_string.c_str[i] == old_char) {
-            new_string.c_str[i] = new_char;
+        if (new_string[i] == old_char) {
+            new_string[i] = new_char;
         }
     }
 
@@ -511,7 +528,7 @@ xpSlice xp_slice_make_from_string(xpString string, isize begin, isize len) {
     }
 
     xpSlice slice = {};
-    slice.data = string.c_str + begin;
+    slice.data = cast(char *)(string) + begin;
     slice.len = len;
 
     return slice;
