@@ -38,6 +38,13 @@ static void test_string() {
     isize idx = xp_string_find_char("abcde", 'c');
     XP_ASSERT(idx == 2);
 
+    // xp_string_set_count
+    xpString buf = xp_make_string_capacity(xp_heap_allocator(), NULL, 8);
+    memcpy(buf, "hi", 2);
+    xp_string_set_count(buf, 2);
+    XP_ASSERT(xp_string_equal(buf, "hi"));
+    xp_string_free(buf);
+
     // xp_string_replace_char
     xpString s5 = xp_string_replace_char("a,b,c", ',', ';', xp_heap_allocator());
     XP_ASSERT(xp_string_equal(s5, "a;b;c"));

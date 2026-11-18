@@ -76,6 +76,7 @@ typedef struct xpSlice {
 
 xp_define isize xp_string_count(xpString string);
 xp_define isize xp_string_capacity(xpString string);
+xp_define void xp_string_set_count(xpString string, isize count);
 xp_define xpString xp_make_string(xpAllocator allocator, char const *str);
 xp_define xpString xp_make_string_capacity(xpAllocator allocator, void const *str, isize capacity);
 xp_define xpString xp_make_string_count(xpAllocator allocator, char const *str, isize count);
@@ -248,6 +249,14 @@ isize xp_string_capacity(xpString string) {
         return 0;
     }
     return XP_STRING_META(string)->capacity;
+}
+
+void xp_string_set_count(xpString string, isize count) {
+    XP_ASSERT_DEFAULT(count >= 0);
+    XP_ASSERT_DEFAULT(count <= xp_string_capacity(string));
+
+    XP_STRING_META(string)->count = count;
+    (cast(char *)(string))[count] = '\0';
 }
 
 
