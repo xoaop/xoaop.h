@@ -10,25 +10,26 @@
 #include <type_traits>
 
 static void test_string() {
-    // 默认构造（值初始化归零）
-    xpString z{};
-    XP_ASSERT(z.length == 0);
-    XP_ASSERT(z.c_str == nullptr);
+    // 空字符串就是 NULL
+    xpString z = xp_make_string_zero();
+    XP_ASSERT(xp_string_count(z) == 0);
+    XP_ASSERT(z == nullptr);
 
-    // const char* 构造 (无分配)
-    xpString s = "hello world";
-    XP_ASSERT(s.length == 11);
+    // 字面量复制到堆
+    xpString s = xp_make_string(xp_heap_allocator(),"hello world");
+    XP_ASSERT(xp_string_count(s) == 11);
     XP_ASSERT(xp_string_cmp(s, "hello world") == 0);
     XP_ASSERT(xp_string_equal(s, "hello world"));
+    xp_string_free(s);
 
     // xpAllocator + const char* 构造 (分配拷贝)
-    xpString s2(xp_heap_allocator(), "test");
-    XP_ASSERT(s2.length == 4);
-    XP_ASSERT(s2.c_str[0] == 't');
+    xpString s2 = xp_make_string(xp_heap_allocator(), "test");
+    XP_ASSERT(xp_string_count(s2) == 4);
+    XP_ASSERT(s2[0] == 't');
     xp_string_free(s2);
 
     // xp_string_append
-    xpString s3(xp_heap_allocator(), "hello");
+    xpString s3 = xp_make_string(xp_heap_allocator(), "hello");
     xp_string_append(&s3, " world");
     XP_ASSERT(xp_string_equal(s3, "hello world"));
     xp_string_free(s3);
@@ -99,7 +100,7 @@ static void test_result() {
 static void test_pair() {
     auto pair = xp_make_pair(1, "one");
     XP_ASSERT(pair.first == 1);
-    XP_ASSERT(xp_string_equal(pair.second, "one"));
+    XP_ASSERT(std::strcmp(pair.second, "one") == 0);
 
     std::printf("[OK] test_pair\n");
 }
@@ -251,9 +252,9 @@ static void test_hashmap() {
     auto map = xp_hash_map_make<int, xpString>(xp_heap_allocator());
 
     // insert
-    xp_hash_map_insert(&map, 1, xpString("one"));
-    xp_hash_map_insert(&map, 2, xpString("two"));
-    xp_hash_map_insert(&map, 3, xpString("three"));
+    xp_hash_map_insert(&map, 1, xp_make_string(xp_heap_allocator(),"one"));
+    xp_hash_map_insert(&map, 2, xp_make_string(xp_heap_allocator(),"two"));
+    xp_hash_map_insert(&map, 3, xp_make_string(xp_heap_allocator(),"three"));
 
     // get
     xpString* val = xp_hash_map_get(map, 2);
@@ -265,7 +266,7 @@ static void test_hashmap() {
     XP_ASSERT(val == nullptr);
 
     // update
-    xp_hash_map_insert(&map, 1, xpString("ONE"));
+    xp_hash_map_insert(&map, 1, xp_make_string(xp_heap_allocator(),"ONE"));
     val = xp_hash_map_get(map, 1);
     XP_ASSERT(xp_string_equal(*val, "ONE"));
 
@@ -287,7 +288,7 @@ static void test_hashmap() {
     XP_ASSERT(xp_string_equal(v, "three"));
 
     // operator[] write
-    map[3] = xpString("THREE");
+    map[3] = xp_make_string(xp_heap_allocator(),"THREE");
     XP_ASSERT(xp_string_equal(map[3], "THREE"));
 
     xp_hash_map_free(map);
@@ -383,11 +384,11 @@ static void test_intern() {
 }
 
 static void test_string_concat_mid() {
-    xpString a(xp_heap_allocator(), "start");
-    xpString b(xp_heap_allocator(), "end");
+    xpString a = xp_make_string(xp_heap_allocator(), "start");
+    xpString b = xp_make_string(xp_heap_allocator(), "end");
 
     // with middle
-    xpString result = xp_string_concat_mid(a, b, xpOption<xpString>::some("-"), xp_heap_allocator());
+    xpString result = xp_string_concat_mid(a, b, xpOption<xpString>::some(xp_make_string(xp_heap_allocator(),"-")), xp_heap_allocator());
     XP_ASSERT(xp_string_equal(result, "start-end"));
     xp_string_free(result);
 

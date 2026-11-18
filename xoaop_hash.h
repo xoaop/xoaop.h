@@ -42,7 +42,11 @@ namespace std {
 template<>
 struct hash<xpString> {
     size_t operator()(const xpString& s) const noexcept {
-        return xp_murmur_hash3_32(s.c_str, static_cast<usize>(s.length), 0);
+        isize count = xp_string_count(s);
+        if (count <= 0) {
+            return 0;
+        }
+        return xp_murmur_hash3_32(s.c_str, static_cast<usize>(count), 0);
     }
 };
 }

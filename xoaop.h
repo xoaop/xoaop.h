@@ -849,7 +849,7 @@ b32 xp_str_to_num_base(char const *str, u32 base, u64 *result) {
 b32 xp_str_to_integer(char const *str, i128 *result) {
     XP_ASSERT_DEFAULT(result != NULL);
 
-    isize len = xp_strlen_c(str);
+    isize len = cast(isize)strlen(str);
 
     XP_ASSERT_MSG(len > 0, "xp_str_to_integer() meet zero len str!\n");
 

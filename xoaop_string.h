@@ -25,29 +25,35 @@ extern "C" {
     字符串, 切片
 */
 
-xp_define isize xp_strlen_c(char const *str);
 xp_define char *xp_find_first_non_space(const char *str);
 
 
 // NOTE(xoaop): ONLY ASCII NOW
-typedef struct xpString {
+// NOTE(xoaop): 元数据在字符数据前面, c_str 指向字符数据
+//   [ xpStringMetaData | char data | '\0' ]
+//   ^                   ^ c_str
+typedef struct xpStringMetaData {
     xpAllocator allocator;
-    isize length;
+    isize count;
     isize capacity;
+} xpStringMetaData;
+
+#define XP_STRING_META(str) (((xpStringMetaData *)((str).c_str)) - 1)
+
+typedef struct xpString {
     char *c_str;
 
 #if defined(__cplusplus)
-        xpString() = default;
-        xpString(const char* str);
-        xpString(xpAllocator allocator, const char* str);
-        bool operator== (xpString other) const;
-        char operator[] (isize index) const;
-        char *as_c_str() const;
+    xpString();
+    xpString(char const *str);
+    xpString(xpAllocator allocator, char const *str);
+    operator char *() const;
+    bool operator==(xpString other) const;
+    bool operator!=(xpString other) const;
+    bool operator==(char const *other) const;
+    bool operator!=(char const *other) const;
 #endif // __cplusplus
-
-
 } xpString;
-
 
 
 typedef struct xpSlice {
@@ -56,7 +62,8 @@ typedef struct xpSlice {
 } xpSlice;
 
 
-xp_define xpString xp_string_c(char const *str);
+xp_define isize xp_string_count(xpString string);
+xp_define isize xp_string_capacity(xpString string);
 xp_define xpString xp_make_string(xpAllocator allocator, char const *str);
 xp_define xpString xp_make_string_capacity(xpAllocator allocator, void const *str, isize capacity);
 xp_define xpString xp_make_string_count(xpAllocator allocator, char const *str, isize count);
@@ -71,6 +78,7 @@ xp_define xpString *xp_string_extend(xpString *string, isize extended_size);
 xp_define isize xp_string_find_char(xpString str, char c);
 xp_define xpString *xp_string_insert(isize pos, xpString *str, xpString inserted_str);
 xp_define xpString *xp_string_append(xpString *str, xpString appended_str);
+xp_define xpString *xp_string_append_c(xpString *str, char const *appended_str);
 xp_define xpString *xp_string_append_char(xpString *str, char c);
 xp_define xpString xp_isize_to_string(isize value, xpAllocator allocator);
 xp_define xpString xp_string_replace_char(xpString string, char old_char, char new_char, xpAllocator allocator);
@@ -91,6 +99,68 @@ xp_define xpSlice xp_slice_make_from_string(xpString string, isize begin, isize 
 // xpString CPP 相关操作声明
 //
 
+// NOTE(xoaop): const char* 重载, 让字面量直接参与比较/追加
+inline b32 xp_string_cmp(xpString a, char const *b) {
+    isize a_count = xp_string_count(a);
+    isize b_count = b != NULL ? cast(isize)strlen(b) : 0;
+    if (a_count > b_count) {
+        return 1;
+    } else if (a_count < b_count) {
+        return -1;
+    }
+
+    if (a_count == 0) {
+        return 0;
+    }
+    return memcmp(a.c_str, b, static_cast<size_t>(a_count));
+}
+
+inline b32 xp_string_equal(xpString a, char const *b) {
+    return xp_string_cmp(a, b) == 0;
+}
+
+inline isize xp_string_find_char(char const *str, char c) {
+    if (str == NULL) {
+        return -1;
+    }
+    for (isize i = 0; str[i] != '\0'; i++) {
+        if (str[i] == c) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+inline xpString *xp_string_append(xpString *str, char const *appended_str) {
+    return xp_string_append_c(str, appended_str);
+}
+
+inline xpString xp_string_replace_char(char const *string, char old_char, char new_char, xpAllocator allocator) {
+    xpString new_string = xp_make_string(allocator, string);
+
+    isize count = xp_string_count(new_string);
+    for (isize i = 0; i < count; i++) {
+        if (new_string.c_str[i] == old_char) {
+            new_string.c_str[i] = new_char;
+        }
+    }
+
+    return new_string;
+}
+
+inline xpSlice xp_slice_make_from_string(char const *string, isize begin, isize len) {
+    isize string_count = string != NULL ? cast(isize)strlen(string) : 0;
+    if ((len < 0 || begin < 0) || ((begin + len) > string_count)) {
+        XP_ASSERT(0);
+    }
+
+    xpSlice slice = {};
+    slice.data = cast(void *)(string + begin);
+    slice.len = len;
+
+    return slice;
+}
+
 xpString xp_string_concat_mid(xpString a, xpString b, xpOption<xpString> middle, xpAllocator allocator);
 
 
@@ -102,10 +172,9 @@ struct std::formatter<xpString> : std::formatter<std::string_view> {
 
 
     auto format(const xpString& s, std::format_context& ctx) const {
-        return std::formatter<std::string_view>::format(
-            std::string_view(s.c_str, static_cast<size_t>(s.length)),
-            ctx
-        );
+        const char *data = s.c_str != NULL ? s.c_str : "";
+        std::string_view view(data, static_cast<size_t>(xp_string_count(s)));
+        return std::formatter<std::string_view>::format(view, ctx);
     }
 };
 
@@ -125,30 +194,6 @@ extern "C" {
 //
 // 字符串实现
 //
-isize xp_strlen_c(char const *str) {
-    isize len = 0;
-    for (; str[len] != '\0'; len += 1);
-
-    //NOTE: for unknown wrong, maybe unnessery
-    XP_ASSERT(len >= 0);
-    return len;
-}
-
-void xp_strncpy_c(char *dst, const char *src, isize len) {
-    if (len <= 0 || dst == NULL || src == NULL) {
-        return;
-    }
-
-    isize index = 0;
-    for (; index < len && src[index] != '\0'; index += 1) {
-        dst[index] = src[index];
-    }
-
-    //NOTE(xoaop): 兼容c字符串
-    dst[index] = '\0'; // 正确：在实际拷贝结束位置补零，而不是强制在len-1位置
-}
-
-
 char *xp_find_first_non_space(const char *str) {
     XP_ASSERT_DEFAULT(str != NULL);
     while (*str && isspace(cast(unsigned char) * str)) {
@@ -158,115 +203,124 @@ char *xp_find_first_non_space(const char *str) {
 }
 
 
+static xpString xp_string_alloc(xpAllocator allocator, isize capacity) {
+    XP_ASSERT_DEFAULT(capacity >= 0);
 
-xpString xp_string_c(char const *str) {
-    XP_ASSERT_DEFAULT(str != NULL);
+    isize size = cast(isize)sizeof(xpStringMetaData) + capacity + 1;
+    char *base = cast(char *)xp_alloc(allocator, size);
+    XP_ASSERT_DEFAULT(base != NULL);
+    if (base == NULL) {
+        return xp_make_string_zero();
+    }
+    memset(base, 0, cast(size_t)size);
+
+    xpStringMetaData *meta = cast(xpStringMetaData *)base;
+    meta->allocator = allocator;
+    meta->count = 0;
+    meta->capacity = capacity;
 
     xpString string;
-    string.allocator = {NULL, NULL};
-    string.length = xp_strlen_c(str);
-    string.capacity = xp_strlen_c(str);
-    string.c_str = cast(char *)str;
+    string.c_str = base + sizeof(xpStringMetaData);
     return string;
+}
+
+isize xp_string_count(xpString string) {
+    if (string.c_str == NULL) {
+        return 0;
+    }
+    return XP_STRING_META(string)->count;
+}
+
+isize xp_string_capacity(xpString string) {
+    if (string.c_str == NULL) {
+        return 0;
+    }
+    return XP_STRING_META(string)->capacity;
 }
 
 
 xpString xp_make_string(xpAllocator allocator, char const *str) {
-    return xp_make_string_capacity(allocator, str, xp_strlen_c(str));
+    if (str == NULL) {
+        return xp_make_string_zero();
+    }
+    return xp_make_string_capacity(allocator, str, cast(isize)strlen(str));
 }
 
 
 xpString xp_make_string_capacity(xpAllocator allocator, void const *str, isize capacity) {
     XP_ASSERT_DEFAULT(capacity >= 0);
 
+    xpString string = xp_string_alloc(allocator, capacity);
+    if (string.c_str == NULL) {
+        return string;
+    }
 
-    xpString string;
-    string.allocator = allocator;
-    string.c_str = cast(char *) xp_alloc(string.allocator, capacity + 1); // NOTE: +1是为了末尾的'\0'
-    string.capacity = capacity;
-
-    // 计算实际长度
-    isize length = 0;
+    isize count = 0;
     if (str != NULL) {
-        length = xp_strlen_c(cast(char const *)str);
+        count = cast(isize)strlen(cast(char const *)str);
+        if (count > capacity) {
+            count = capacity;
+        }
+        memcpy(string.c_str, str, cast(size_t)count);
     }
-    if (length > capacity) {
-        length = capacity;
-    }
-    string.length = length;
 
+    string.c_str[count] = '\0';
+    XP_STRING_META(string)->count = count;
 
-    // 清空空间
-    memset(string.c_str, '\0', string.capacity + 1); // NOTE: +1是为了末尾的'\0'
-    // 复制字符串内容
-    memcpy(string.c_str, str, string.length);
-
-    // 末尾补上'\0'
-    // string.c_str[length] = '\0';
     return string;
 }
 
 xpString xp_make_string_count(xpAllocator allocator, char const *str, isize count) {
     XP_ASSERT_DEFAULT(count >= 0);
 
-    xpString string = xp_make_string_zero();
-    string.allocator = allocator;
-
-    // count 就是长度，不扫描 NUL。
-    // 之前这里做 xp_strlen_c(str)：当 str 指向更大缓冲区中间（词法器传的是源码
-    // 里某个 token 的起点）时会一路扫到缓冲区末尾，每个 token 一次，整体 O(n^2)。
-    string.length = count;
-    string.capacity = count;
-
-    string.c_str = cast(char *) xp_alloc(string.allocator, count + 1); // NOTE: +1是为了末尾的'\0'
-
-    // 复制字符串内容
-    if (count > 0) {
-        memcpy(string.c_str, str, (size_t) count);
+    xpString string = xp_string_alloc(allocator, count);
+    if (string.c_str == NULL) {
+        return string;
     }
 
-    // 末尾补上'\0'
-    string.c_str[string.capacity] = '\0';
+    if (str != NULL && count > 0) {
+        memcpy(string.c_str, str, cast(size_t)count);
+    }
 
+    string.c_str[count] = '\0';
+    XP_STRING_META(string)->count = count;
 
     return string;
 }
 
 xpString xp_make_string_zero() {
     xpString string;
-    string.allocator = { NULL, NULL };
     string.c_str = NULL;
-    string.length = 0;
-    string.capacity = 0;
     return string;
 }
 
 xpString xp_string_to_c_style(xpString string, xpAllocator allocator) {
-    xpString c_style_string = xp_make_string_count(allocator, string.c_str, string.length);
-    return c_style_string;
+    return xp_make_string_count(allocator, string.c_str, xp_string_count(string));
 }
 
 
 void xp_string_free(xpString string) {
-    if (string.allocator.proc != NULL) {
-        xp_free(string.allocator, string.c_str);
+    if (string.c_str == NULL) {
+        return;
     }
+
+    xpStringMetaData *meta = XP_STRING_META(string);
+    xp_free(meta->allocator, meta);
 }
 
 b32 xp_string_cmp(xpString a, xpString b) {
-    if (a.length > b.length) {
+    isize a_count = xp_string_count(a);
+    isize b_count = xp_string_count(b);
+    if (a_count > b_count) {
         return 1;
-    } else if (a.length < b.length) {
+    } else if (a_count < b_count) {
         return -1;
     }
 
-    for (isize i = 0; i < a.length; i++) {
-        if (a.c_str[i] != b.c_str[i]) {
-            return (a.c_str[i] > b.c_str[i]) ? 1 : -1;
-        }
+    if (a_count == 0) {
+        return 0;
     }
-
-    return 0;
+    return memcmp(a.c_str, b.c_str, cast(size_t)a_count);
 }
 
 b32 xp_string_equal(xpString a, xpString b) {
@@ -274,44 +328,50 @@ b32 xp_string_equal(xpString a, xpString b) {
 }
 
 xpString xp_string_copy(xpAllocator allocator, xpString string) {
-    xpString string_copy;
+    isize count = xp_string_count(string);
 
-    string_copy.allocator = allocator;
-    string_copy.length = string.length;
-    string_copy.capacity = string.length;
+    xpString string_copy = xp_string_alloc(allocator, count);
+    if (string_copy.c_str == NULL) {
+        return string_copy;
+    }
 
-    string_copy.c_str = cast(char *) xp_alloc(string_copy.allocator, string_copy.capacity + 1);
-    memcpy(string_copy.c_str, string.c_str, string.length);
+    if (count > 0) {
+        memcpy(string_copy.c_str, string.c_str, cast(size_t)count);
+    }
+    string_copy.c_str[count] = '\0'; // 末尾补上'\0'
+    XP_STRING_META(string_copy)->count = count;
 
-    string_copy.c_str[string.length] = '\0'; // 末尾补上'\0'
     return string_copy;
 }
 
 
 xpString *xp_string_extend(xpString *string, isize extended_size) {
-    if (extended_size <= 0) {
+    if (extended_size <= 0 || string == NULL || string->c_str == NULL) {
         return string;
     }
 
-    char *new_c_str = cast(char *)xp_alloc(
-        string->allocator,
-        string->capacity + extended_size + 1 // +1是为了末尾的'\0'
-    );
-    memcpy(new_c_str, string->c_str, string->length);
-    xp_free(string->allocator, string->c_str);
+    xpStringMetaData *meta = XP_STRING_META(*string);
+    isize old_capacity = meta->capacity;
+    isize new_capacity = old_capacity + extended_size;
+    isize old_size = cast(isize)sizeof(xpStringMetaData) + old_capacity + 1;
+    isize new_size = cast(isize)sizeof(xpStringMetaData) + new_capacity + 1;
 
-    string->c_str = new_c_str;
+    xpStringMetaData *new_meta = cast(xpStringMetaData *)xp_realloc(meta->allocator, meta, new_size, old_size);
+    XP_ASSERT_DEFAULT(new_meta != NULL);
+    if (new_meta == NULL) {
+        return string;
+    }
 
-    string->capacity = string->capacity + extended_size;
-
-    string->c_str[string->length] = '\0'; // 末尾补上'\0'
-
+    new_meta->capacity = new_capacity;
+    string->c_str = cast(char *)(new_meta + 1);
+    string->c_str[new_meta->count] = '\0'; // 末尾补上'\0'
 
     return string;
 }
 
 isize xp_string_find_char(xpString str, char c) {
-    for (isize i = 0; i < str.length; i++) {
+    isize count = xp_string_count(str);
+    for (isize i = 0; i < count; i++) {
         if (str.c_str[i] == c) {
             return i;
         }
@@ -319,59 +379,101 @@ isize xp_string_find_char(xpString str, char c) {
     return -1;
 }
 
+
+// NOTE(xoaop): str->c_str 必须非空, data_count > 0
+static void xp_string_insert_raw(isize pos, xpString *str, void const *data, isize data_count) {
+    isize count = xp_string_count(*str);
+    isize capacity = xp_string_capacity(*str);
+
+    if (count + data_count > capacity) {
+        xp_string_extend(str, count + data_count - capacity);
+    }
+
+    char *chars = str->c_str;
+
+    if (pos < count) {
+        memmove(chars + pos + data_count, chars + pos, cast(size_t)(count - pos));
+    }
+    memcpy(chars + pos, data, cast(size_t)data_count);
+
+    isize new_count = count + data_count;
+    chars[new_count] = '\0';
+    XP_STRING_META(*str)->count = new_count;
+}
+
 xpString *xp_string_insert(isize pos, xpString *str, xpString inserted_str) {
+    XP_ASSERT_DEFAULT(str != NULL);
     XP_ASSERT_DEFAULT(pos >= 0);
-    XP_ASSERT_DEFAULT(pos <= str->length);
+    XP_ASSERT_DEFAULT(pos <= xp_string_count(*str));
 
-    // 1. 扩容，确保插入后长度不会超过 capacity
-    if (str->length + inserted_str.length > str->capacity) {
-        xp_string_extend(str, inserted_str.length + (str->length + inserted_str.length - str->capacity));
+    isize inserted_count = xp_string_count(inserted_str);
+    if (inserted_count <= 0) {
+        return str;
     }
 
-    XP_ASSERT_DEFAULT(str->length + inserted_str.length <= str->capacity);
-
-    // 2. 后移原有数据
-    if (pos < str->length) {
-        isize moved_size = str->length - pos;
-        memmove(str->c_str + pos + inserted_str.length, str->c_str + pos, moved_size);
+    if (str->c_str == NULL) {
+        *str = xp_string_copy(XP_STRING_META(inserted_str)->allocator, inserted_str);
+        return str;
     }
 
-    // 3. 插入新字符串
-    memcpy(str->c_str + pos, inserted_str.c_str, inserted_str.length);
-
-    str->length += inserted_str.length;
-
-    XP_ASSERT_DEFAULT(str->length <= str->capacity);
-
-    // 4. 末尾补零
-    str->c_str[str->length] = '\0';
-
+    xp_string_insert_raw(pos, str, inserted_str.c_str, inserted_count);
 
     return str;
 }
 
 xpString *xp_string_append_char(xpString *str, char c) {
-    xpString char_str = xp_make_string_zero();
-    char_str.c_str = &c;
-    char_str.length = 1;
-    char_str.capacity = 1;
+    if (str == NULL) {
+        return str;
+    }
 
-    return xp_string_append(str, char_str);
+    if (str->c_str == NULL) {
+        *str = xp_make_string_count(xp_default_allocator(), &c, 1);
+        return str;
+    }
+
+    xp_string_insert_raw(xp_string_count(*str), str, &c, 1);
+
+    return str;
 }
 
 xpString *xp_string_append(xpString *str, xpString appended_str) {
-    return xp_string_insert(str->length, str, appended_str);
+    if (str == NULL) {
+        return str;
+    }
+    return xp_string_insert(xp_string_count(*str), str, appended_str);
 }
 
+xpString *xp_string_append_c(xpString *str, char const *appended_str) {
+    if (str == NULL || appended_str == NULL) {
+        return str;
+    }
+
+    isize appended_count = cast(isize)strlen(appended_str);
+    if (appended_count <= 0) {
+        return str;
+    }
+
+    if (str->c_str == NULL) {
+        *str = xp_make_string_count(xp_default_allocator(), appended_str, appended_count);
+        return str;
+    }
+
+    xp_string_insert_raw(xp_string_count(*str), str, appended_str, appended_count);
+
+    return str;
+}
 
 
 xpString xp_isize_to_string(isize value, xpAllocator allocator) {
     isize len = snprintf(NULL, 0, "%lld", value);
 
     xpString string = xp_make_string_capacity(allocator, NULL, len);
-    snprintf(string.c_str, string.capacity + 1, "%lld", value);
+    if (string.c_str == NULL) {
+        return string;
+    }
+    snprintf(string.c_str, cast(size_t)(len + 1), "%lld", value);
 
-    string.length = len;
+    XP_STRING_META(string)->count = len;
 
     return string;
 }
@@ -379,7 +481,8 @@ xpString xp_isize_to_string(isize value, xpAllocator allocator) {
 xpString xp_string_replace_char(xpString string, char old_char, char new_char, xpAllocator allocator) {
     xpString new_string = xp_string_copy(allocator, string);
 
-    for (isize i = 0; i < new_string.length; i++) {
+    isize count = xp_string_count(new_string);
+    for (isize i = 0; i < count; i++) {
         if (new_string.c_str[i] == old_char) {
             new_string.c_str[i] = new_char;
         }
@@ -402,7 +505,8 @@ xpSlice xp_slice_make(void *data, isize len) {
 }
 
 xpSlice xp_slice_make_from_string(xpString string, isize begin, isize len) {
-    if ((len < 0 || begin < 0) || ((begin + len) > string.length)) {
+    isize string_count = xp_string_count(string);
+    if ((len < 0 || begin < 0) || ((begin + len) > string_count)) {
         XP_ASSERT(0);
     }
 
@@ -425,30 +529,37 @@ xpSlice xp_slice_make_from_string(xpString string, isize begin, isize len) {
 // xpString CPP 部分实现
 //
 
-
-xpString::xpString(const char* str) {
-    *this = xp_string_c(str);
+xpString::xpString() {
+    c_str = NULL;
 }
 
-xpString::xpString(xpAllocator allocator, const char* str) {
+xpString::xpString(char const *str) {
+    *this = xp_make_string(xp_default_allocator(), str);
+}
+
+xpString::xpString(xpAllocator allocator, char const *str) {
     *this = xp_make_string(allocator, str);
 }
 
-bool xpString::operator== (xpString other) const {
-    b32 xp_string_cmp(xpString a, xpString b);
-    return !xp_string_cmp(*this, other);
-}
-
-char xpString::operator[] (isize index) const {
-    XP_ASSERT_DEFAULT(index >= 0 && index < length);
-    return c_str[index];
-}
-
-char *xpString::as_c_str() const {
-    // 目前都是c风格
+xpString::operator char *() const {
     return c_str;
 }
 
+bool xpString::operator==(xpString other) const {
+    return xp_string_equal(*this, other) != 0;
+}
+
+bool xpString::operator!=(xpString other) const {
+    return !(*this == other);
+}
+
+bool xpString::operator==(char const *other) const {
+    return xp_string_equal(*this, other) != 0;
+}
+
+bool xpString::operator!=(char const *other) const {
+    return !(*this == other);
+}
 
 
 xpString xp_string_concat_mid(xpString a, xpString b, xpOption<xpString> middle, xpAllocator allocator) {
